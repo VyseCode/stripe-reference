@@ -433,6 +433,36 @@ function main() {
   statusIs("page: unknown invoice 404", request("GET", "/invoices/no-such-invoice"), 404);
   statusIs("page: unknown route 404", request("GET", "/definitely-not-a-page"), 404);
 
+  console.log("\n— Rendered HTML content —");
+  const rendered = [
+    ["/dashboard", ["Monthly recurring", "Revenue collected", "Subscription mix", "Webhook log", "<svg", "Ledgerline"]],
+    ["/customers", ["Customer directory", "Harbor", "Finch", "New customer"]],
+    ["/customers/cust_001", ["cust_001", "Payment methods", "Recent invoices", "Harbor", "Finch"]],
+    ["/products", ["Product catalog", "Atlas Analytics"]],
+    ["/prices", ["Price list", "price_001"]],
+    ["/subscriptions", ["Subscriptions", "sub_001"]],
+    ["/subscriptions/sub_001", ["Lifecycle actions", "sub_001"]],
+    ["/checkout", ["cs_001", "Hosted checkout"]],
+    ["/checkout/cs_001", ["Hosted checkout", "cs_001", "Amount due"]],
+    ["/invoices", ["INV-2026-0001", "Invoices"]],
+    ["/invoices/in_001", ["INV-2026-0001", "Line items", "Total"]],
+    ["/refunds", ["Refunds", "re_001"]],
+    ["/disputes", ["Disputes", "dp_001"]],
+    ["/balance", ["Balance", "Balance ledger", "Available"]],
+    ["/payouts", ["Payouts", "po_001"]],
+    ["/webhooks", ["evt_001", "Signature format"]],
+    ["/api-keys", ["API keys", "ll_admin_"]],
+  ];
+  for (const [path, needles] of rendered) {
+    const result = request("GET", path);
+    const missing = needles.filter((needle) => !result.text.includes(needle));
+    assert(`html: ${path} contains expected content`, missing.length === 0, `missing: ${missing.join(", ")}`);
+  }
+  const loginHtml = request("GET", "/login", undefined, { noAuth: true });
+  assert("html: login page content", loginHtml.text.includes("Sign in to your account") && loginHtml.text.includes("Ledgerline"));
+  const registerHtml = request("GET", "/register", undefined, { noAuth: true });
+  assert("html: register page content", registerHtml.text.includes("Create account"));
+
   console.log(`\nVERIFICATION: ${passed} passed, ${failed} failed`);
   if (failures.length) {
     console.log("Failures:");
