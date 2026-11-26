@@ -406,13 +406,13 @@ async function main() {
       addLedger("refund", -spec.amount, `re_${String(spec.n).padStart(3, "0")}`, "Refund issued to customer", spec.inv.c.currency === "usd" ? "usd" : spec.inv.c.currency, daysAgo(spec.n + 2));
     }
   }
-  addLedger("dispute", -129000, "dp_001", "Dispute reserve withheld", "usd", daysAgo(4));
+  addLedger("dispute", -12900, "dp_001", "Dispute reserve withheld (10%)", "usd", daysAgo(4));
   addLedger("dispute", 9900, "dp_002", "Dispute won — reserve released", "usd", daysAgo(10));
   const payoutSpecs = [
-    { n: 1, amount: 100000, status: "paid", days: 9 },
-    { n: 2, amount: 75000, status: "pending", days: 2 },
-    { n: 3, amount: 40000, status: "failed", days: 16 },
-    { n: 4, amount: 150000, status: "paid", days: 30 },
+    { n: 1, amount: 40000, status: "paid", days: 9 },
+    { n: 2, amount: 25000, status: "pending", days: 2 },
+    { n: 3, amount: 15000, status: "failed", days: 16 },
+    { n: 4, amount: 30000, status: "paid", days: 30 },
   ];
   for (const spec of payoutSpecs.filter((item) => item.status === "paid")) {
     addLedger("payout", -spec.amount, `po_${String(spec.n).padStart(3, "0")}`, "Payout to bank account •• 4242", "usd", daysAgo(spec.days));

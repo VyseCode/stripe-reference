@@ -647,6 +647,291 @@ export function CompleteCheckout({ sessionId }: { sessionId: string }) {
   );
 }
 
+export function NewInvoiceForm({
+  customers,
+}: {
+  customers: Array<{ id: string; name: string }>;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    const amount = Math.round(Number(form.get("amount")) * 100);
+    try {
+      const result = await send("/api/invoices", "POST", {
+        customer: String(form.get("customer") ?? ""),
+        lines: [
+          {
+            description: String(form.get("description") || "Services"),
+            quantity: 1,
+            unitAmountMinor: amount,
+          },
+        ],
+        taxRateBps: Number(form.get("taxRateBps") ?? 0),
+      });
+      if (!result.ok) {
+        setError(errorMessage(result.data));
+        return;
+      }
+      setOpen(false);
+      router.refresh();
+    } catch {
+      setError("Unable to reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <OpenButton open={open} label="New invoice" onClick={() => setOpen(!open)} />
+      <Panel open={open} title="Create an invoice" onClose={() => setOpen(false)}>
+        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label htmlFor="inv-customer" className="mb-1.5 block text-xs font-semibold text-ink">Customer</label>
+            <select id="inv-customer" name="customer" required defaultValue="" className={inputClass}>
+              <option value="" disabled>Choose a customer</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>{customer.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label htmlFor="inv-description" className="mb-1.5 block text-xs font-semibold text-ink">Line item</label>
+            <input id="inv-description" name="description" className={inputClass} placeholder="Consulting — October" />
+          </div>
+          <div>
+            <label htmlFor="inv-amount" className="mb-1.5 block text-xs font-semibold text-ink">Amount</label>
+            <input id="inv-amount" name="amount" type="number" min="0.01" step="0.01" required className={inputClass} placeholder="125.00" />
+          </div>
+          <div>
+            <label htmlFor="inv-tax" className="mb-1.5 block text-xs font-semibold text-ink">Tax rate (basis points)</label>
+            <input id="inv-tax" name="taxRateBps" type="number" min={0} max={10000} step={1} className={inputClass} placeholder="850" />
+            <p className="mt-1 text-xs text-inksoft">850 = 8.5%. Tax is allocated in integer minor units.</p>
+          </div>
+          <div className="sm:col-span-2">
+            <button type="submit" disabled={busy} className={buttonClass}>
+              {busy ? "Creating…" : "Create invoice"}
+            </button>
+            <ErrorNote message={error} />
+          </div>
+        </form>
+      </Panel>
+    </>
+  );
+}
+
+export function NewRefundForm({
+  invoices,
+}: {
+  invoices: Array<{ id: string; label: string; refundableMinor: number }>;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    try {
+      const result = await send("/api/refunds", "POST", {
+        invoice: String(form.get("invoice") ?? ""),
+        amountMinor: Math.round(Number(form.get("amount")) * 100),
+        reason: String(form.get("reason") ?? "requested_by_customer"),
+      });
+      if (!result.ok) {
+        setError(errorMessage(result.data));
+        return;
+      }
+      setOpen(false);
+      router.refresh();
+    } catch {
+      setError("Unable to reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <OpenButton open={open} label="New refund" onClick={() => setOpen(!open)} />
+      <Panel open={open} title="Issue a refund" onClose={() => setOpen(false)}>
+        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label htmlFor="refund-invoice" className="mb-1.5 block text-xs font-semibold text-ink">Invoice</label>
+            <select id="refund-invoice" name="invoice" required defaultValue="" className={inputClass}>
+              <option value="" disabled>Choose an invoice</option>
+              {invoices.map((invoice) => (
+                <option key={invoice.id} value={invoice.id}>{invoice.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="refund-amount" className="mb-1.5 block text-xs font-semibold text-ink">Amount</label>
+            <input id="refund-amount" name="amount" type="number" min="0.01" step="0.01" required className={inputClass} placeholder="12.00" />
+          </div>
+          <div>
+            <label htmlFor="refund-reason" className="mb-1.5 block text-xs font-semibold text-ink">Reason</label>
+            <select id="refund-reason" name="reason" className={inputClass}>
+              <option value="requested_by_customer">Requested by customer</option>
+              <option value="duplicate">Duplicate charge</option>
+              <option value="fraudulent">Fraudulent</option>
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <button type="submit" disabled={busy} className={buttonClass}>
+              {busy ? "Refunding…" : "Issue refund"}
+            </button>
+            <ErrorNote message={error} />
+          </div>
+        </form>
+      </Panel>
+    </>
+  );
+}
+
+export function NewDisputeForm({
+  invoices,
+}: {
+  invoices: Array<{ id: string; label: string }>;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    try {
+      const result = await send("/api/disputes", "POST", {
+        invoice: String(form.get("invoice") ?? ""),
+        amountMinor: Math.round(Number(form.get("amount")) * 100),
+        reason: String(form.get("reason") ?? "product_not_received"),
+      });
+      if (!result.ok) {
+        setError(errorMessage(result.data));
+        return;
+      }
+      setOpen(false);
+      router.refresh();
+    } catch {
+      setError("Unable to reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <OpenButton open={open} label="New dispute" onClick={() => setOpen(!open)} />
+      <Panel open={open} title="Open a dispute" onClose={() => setOpen(false)}>
+        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label htmlFor="dispute-invoice" className="mb-1.5 block text-xs font-semibold text-ink">Invoice</label>
+            <select id="dispute-invoice" name="invoice" required defaultValue="" className={inputClass}>
+              <option value="" disabled>Choose an invoice</option>
+              {invoices.map((invoice) => (
+                <option key={invoice.id} value={invoice.id}>{invoice.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="dispute-amount" className="mb-1.5 block text-xs font-semibold text-ink">Amount</label>
+            <input id="dispute-amount" name="amount" type="number" min="0.01" step="0.01" required className={inputClass} placeholder="49.00" />
+          </div>
+          <div>
+            <label htmlFor="dispute-reason" className="mb-1.5 block text-xs font-semibold text-ink">Reason</label>
+            <select id="dispute-reason" name="reason" className={inputClass}>
+              <option value="product_not_received">Product not received</option>
+              <option value="unrecognized">Unrecognized charge</option>
+              <option value="duplicate">Duplicate</option>
+              <option value="fraudulent">Fraudulent</option>
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <button type="submit" disabled={busy} className={buttonClass}>
+              {busy ? "Opening…" : "Open dispute"}
+            </button>
+            <ErrorNote message={error} />
+          </div>
+        </form>
+      </Panel>
+    </>
+  );
+}
+
+export function NewPayoutForm({ availableMinor }: { availableMinor: number }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    try {
+      const result = await send("/api/payouts", "POST", {
+        amountMinor: Math.round(Number(form.get("amount")) * 100),
+        destination: String(form.get("destination") || "bank •• 4242"),
+      });
+      if (!result.ok) {
+        setError(errorMessage(result.data));
+        return;
+      }
+      setOpen(false);
+      router.refresh();
+    } catch {
+      setError("Unable to reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(!open)} className={buttonClass}>
+        <PlusIcon className="h-4 w-4" />
+        New payout
+      </button>
+      <Panel open={open} title="Schedule a payout" onClose={() => setOpen(false)}>
+        <form onSubmit={submit} className="grid gap-4">
+          <p className="text-xs text-inksoft">
+            Available to pay out: {(availableMinor / 100).toFixed(2)}
+          </p>
+          <div>
+            <label htmlFor="payout-amount" className="mb-1.5 block text-xs font-semibold text-ink">Amount</label>
+            <input id="payout-amount" name="amount" type="number" min="0.01" step="0.01" required className={inputClass} placeholder="250.00" />
+          </div>
+          <div>
+            <label htmlFor="payout-destination" className="mb-1.5 block text-xs font-semibold text-ink">Destination</label>
+            <input id="payout-destination" name="destination" className={inputClass} defaultValue="bank •• 4242" />
+          </div>
+          <div>
+            <button type="submit" disabled={busy} className={buttonClass}>
+              {busy ? "Scheduling…" : "Schedule payout"}
+            </button>
+            <ErrorNote message={error} />
+          </div>
+        </form>
+      </Panel>
+    </>
+  );
+}
+
 export function RowAction({
   url,
   method,

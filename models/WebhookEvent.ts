@@ -1,9 +1,9 @@
-import { Schema, model, models, type Model } from "mongoose";
+import { Schema, model, models, type Model, type Types } from "mongoose";
 
 export type WebhookStatus = "received" | "processed" | "duplicate" | "failed";
 
 export interface IWebhookEvent {
-  _id: Schema.Types.ObjectId;
+  _id: Types.ObjectId;
   eventId: string;
   type: string;
   payload: Record<string, unknown>;

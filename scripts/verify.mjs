@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import { createHmac } from "node:crypto";
 
 const BASE = process.env.BASE_URL || "http://127.0.0.1:3221";
 const JAR = "/tmp/opencode/stripe-verify-jar.txt";
@@ -26,7 +27,9 @@ function request(method, path, body, options = {}) {
   for (const [key, value] of Object.entries(options.headers ?? {})) {
     args.push("-H", `${key}: ${value}`);
   }
-  if (body !== undefined) {
+  if (options.rawBody !== undefined) {
+    args.push("-H", "Content-Type: application/json", "--data-raw", options.rawBody);
+  } else if (body !== undefined) {
     args.push("-H", "Content-Type: application/json", "--data", JSON.stringify(body));
   }
   args.push("-X", method, "-w", "\n%{http_code}", `${BASE}${path}`);
@@ -48,6 +51,17 @@ function request(method, path, body, options = {}) {
 
 function statusIs(name, result, expected) {
   assert(name, result.status === expected, `expected ${expected}, got ${result.status}`);
+}
+
+function signedEvent(id, type, data, timestamp = String(Math.floor(Date.now() / 1000))) {
+  const raw = JSON.stringify({ id, type, data });
+  const signature = createHmac("sha256", "whsec_local_reference_secret_3221")
+    .update(`${timestamp}.${raw}`)
+    .digest("hex");
+  return {
+    raw,
+    headers: { "x-ledgerline-signature": `t=${timestamp},v1=${signature}` },
+  };
 }
 
 function main() {
@@ -289,10 +303,124 @@ function main() {
   const subCompleted = request("POST", `/api/checkout/sessions/${subCheckoutId}/complete`, {});
   assert("checkout: subscription mode creates subscription", Boolean(subCompleted.json?.subscription?.id));
 
+  console.log("\n— Slice 4: invoices, refunds, disputes, ledger and webhooks —");
+
+  const invoices = request("GET", "/api/invoices");
+  statusIs("invoices: list", invoices, 200);
+  assert("invoices: at least 12 seeded invoices", invoices.json?.total >= 12, `total=${invoices.json?.total}`);
+  const paidInvoices = request("GET", "/api/invoices?status=paid");
+  assert("invoices: paid filter", paidInvoices.json?.total >= 5, `total=${paidInvoices.json?.total}`);
+  statusIs("invoices: detail by pid", request("GET", "/api/invoices/in_001"), 200);
+  statusIs("invoices: detail 404", request("GET", "/api/invoices/nope"), 404);
+
+  const rounding = request("POST", "/api/invoices", {
+    customer: "cust_001",
+    lines: [
+      { description: "Line A", quantity: 1, unitAmountMinor: 1 },
+      { description: "Line B", quantity: 1, unitAmountMinor: 1 },
+      { description: "Line C", quantity: 1, unitAmountMinor: 1 },
+    ],
+    taxRateBps: 3333,
+  });
+  statusIs("invoices: rounding create", rounding, 201);
+  assert("invoices: integer tax rounds to 1", rounding.json?.invoice?.taxMinor === 1, `tax=${rounding.json?.invoice?.taxMinor}`);
+  const lineSum = (rounding.json?.invoice?.lines ?? []).reduce((sum, line) => sum + line.amountMinor, 0);
+  assert("invoices: line allocation sums to total", lineSum === rounding.json?.invoice?.amountMinor, `lines=${lineSum}, total=${rounding.json?.invoice?.amountMinor}`);
+
+  const payInvoice = request("POST", "/api/invoices/in_002/pay", { outcome: "success" });
+  statusIs("invoices: pay success", payInvoice, 200);
+  assert("invoices: paid status", payInvoice.json?.invoice?.status === "paid");
+  statusIs("invoices: double pay 409", request("POST", "/api/invoices/in_002/pay", {}), 409);
+  const failInvoice = request("POST", "/api/invoices/in_003/pay", { outcome: "failure" });
+  statusIs("invoices: pay failure", failInvoice, 200);
+  assert("invoices: uncollectible after failure", failInvoice.json?.invoice?.status === "uncollectible");
+
+  const html = request("GET", "/api/invoices/in_001/html");
+  statusIs("invoices: html view", html, 200);
+  assert("invoices: html has invoice number", html.text.includes("INV-2026-0001"));
+  assert("invoices: html has content type", html.text.startsWith("<!doctype html>"));
+
+  const refunds = request("GET", "/api/refunds");
+  statusIs("refunds: list", refunds, 200);
+  assert("refunds: seeded 4", refunds.json?.total === 4);
+  statusIs("refunds: valid refund", request("POST", "/api/refunds", {
+    invoice: "in_008", amountMinor: 1000, reason: "requested_by_customer",
+  }), 201);
+  const excess = request("POST", "/api/refunds", {
+    invoice: "in_008", amountMinor: 10000,
+  });
+  statusIs("refunds: exceeding charge 400", excess, 400);
+  assert("refunds: error mentions exceeding", typeof excess.json?.error === "string" && excess.json.error.includes("exceed"));
+  statusIs("refunds: unknown invoice 404", request("POST", "/api/refunds", {
+    invoice: "in_missing", amountMinor: 100,
+  }), 404);
+
+  const disputes = request("GET", "/api/disputes");
+  statusIs("disputes: list", disputes, 200);
+  assert("disputes: seeded 3", disputes.json?.total === 3);
+  const newDispute = request("POST", "/api/disputes", {
+    invoice: "in_008", amountMinor: 9900, reason: "unrecognized",
+  });
+  statusIs("disputes: create", newDispute, 201);
+  statusIs("disputes: exceeding amount 400", request("POST", "/api/disputes", {
+    invoice: "in_008", amountMinor: 99999,
+  }), 400);
+  statusIs("disputes: resolve won", request("PATCH", `/api/disputes/${newDispute.json?.dispute?.id}`, { status: "won", evidence: "Delivery confirmation" }), 200);
+  statusIs("disputes: bad status 400", request("PATCH", `/api/disputes/${newDispute.json?.dispute?.id}`, { status: "bogus" }), 400);
+
+  const balance = request("GET", "/api/balance");
+  statusIs("balance: summary", balance, 200);
+  assert("balance: integer minor units", Number.isInteger(balance.json?.balance?.availableMinor));
+  assert("balance: ledger breakdown", typeof balance.json?.balance?.breakdown?.charge?.totalMinor === "number");
+  const transactions = request("GET", "/api/balance/transactions?limit=5");
+  statusIs("balance: transactions", transactions, 200);
+  assert("balance: bounded transactions", transactions.json?.transactions?.length === 5);
+  const charges = request("GET", "/api/balance/transactions?status=charge");
+  assert("balance: charge filter", charges.json?.transactions?.every((row) => row.kind === "charge"));
+
+  const payouts = request("GET", "/api/payouts");
+  statusIs("payouts: list", payouts, 200);
+  assert("payouts: seeded 4", payouts.json?.total === 4);
+  statusIs("payouts: create", request("POST", "/api/payouts", { amountMinor: 1000 }), 201);
+  statusIs("payouts: exceeds balance 400", request("POST", "/api/payouts", { amountMinor: 999999999 }), 400);
+  statusIs("payouts: mark paid", request("POST", "/api/payouts/po_002/pay", {}), 200);
+  statusIs("payouts: double pay 409", request("POST", "/api/payouts/po_002/pay", {}), 409);
+
+  const badSignature = signedEvent("evt_bad_sig", "invoice.paid", { id: "in_001" });
+  statusIs("webhooks: bad signature 400", request("POST", "/api/webhooks/stripe", undefined, {
+    noAuth: true, headers: { "x-ledgerline-signature": "t=1,v1=deadbeef" }, rawBody: badSignature.raw,
+  }), 400);
+
+  const stale = signedEvent("evt_stale", "invoice.paid", { id: "in_001" }, String(Math.floor(Date.now() / 1000) - 900));
+  statusIs("webhooks: stale timestamp 400", request("POST", "/api/webhooks/stripe", undefined, {
+    noAuth: true, headers: stale.headers, rawBody: stale.raw,
+  }), 400);
+
+  const event = signedEvent("evt_verify_001", "checkout.session.completed", { id: "cs_001" });
+  const firstDelivery = request("POST", "/api/webhooks/stripe", undefined, {
+    noAuth: true, headers: event.headers, rawBody: event.raw,
+  });
+  statusIs("webhooks: valid signature 200", firstDelivery, 200);
+  assert("webhooks: processed once", firstDelivery.json?.event?.status === "processed" && firstDelivery.json?.duplicate === false);
+  assert("webhooks: effect applied", firstDelivery.json?.effects?.includes("checkout_session_completed"));
+  const duplicate = request("POST", "/api/webhooks/stripe", undefined, {
+    noAuth: true, headers: event.headers, rawBody: event.raw,
+  });
+  statusIs("webhooks: duplicate event 200", duplicate, 200);
+  assert("webhooks: duplicate flagged", duplicate.json?.duplicate === true);
+  assert("webhooks: duplicate has no effects", Array.isArray(duplicate.json?.effects) && duplicate.json.effects.length === 0);
+  assert("webhooks: delivery counter incremented", duplicate.json?.event?.deliveries === 2);
+  const completedByWebhook = request("GET", "/api/checkout/sessions/cs_001");
+  assert("webhooks: session marked complete exactly once", completedByWebhook.json?.checkoutSession?.status === "complete");
+  const eventLog = request("GET", "/api/webhooks/events");
+  statusIs("webhooks: event log", eventLog, 200);
+  assert("webhooks: log has seeded + new events", eventLog.json?.total === 6, `total=${eventLog.json?.total}`);
+
   console.log("\n— Pages —");
   for (const path of [
     "/dashboard", "/customers", "/customers/cust_001", "/products", "/prices", "/api-keys",
     "/subscriptions", "/subscriptions/sub_001", "/checkout", "/checkout/cs_001",
+    "/invoices", "/invoices/in_001", "/refunds", "/disputes", "/balance", "/payouts", "/webhooks",
   ]) {
     statusIs(`page: ${path}`, request("GET", path), 200);
   }
@@ -302,6 +430,7 @@ function main() {
   statusIs("page: unknown customer 404", request("GET", "/customers/no-such-customer"), 404);
   statusIs("page: unknown subscription 404", request("GET", "/subscriptions/no-such-sub"), 404);
   statusIs("page: unknown checkout 404", request("GET", "/checkout/no-such-session"), 404);
+  statusIs("page: unknown invoice 404", request("GET", "/invoices/no-such-invoice"), 404);
   statusIs("page: unknown route 404", request("GET", "/definitely-not-a-page"), 404);
 
   console.log(`\nVERIFICATION: ${passed} passed, ${failed} failed`);
