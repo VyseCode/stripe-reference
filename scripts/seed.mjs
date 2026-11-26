@@ -244,7 +244,7 @@ async function main() {
   );
 
   const password = await bcrypt.hash("password123", 12);
-  const [owner, admin, member] = await M.User.create([
+  const [owner] = await M.User.create([
     { name: "Dana Whitfield", email: "owner@ledgerline.dev", password, role: "owner" },
     { name: "Ravi Nathan", email: "admin@ledgerline.dev", password, role: "member" },
     { name: "Mira Okafor", email: "member@ledgerline.dev", password, role: "member" },
@@ -318,7 +318,7 @@ async function main() {
     { n: 11, c: c5, s: sub5, status: "open", amount: 4900, days: 2, due: 12, paid: null, desc: "Atlas Analytics — monthly" },
     { n: 12, c: c6, s: null, status: "draft", amount: 25000, days: 0, due: null, paid: null, desc: "Ledger Export — historical data" },
   ];
-  const invoices = await M.Invoice.create(
+  await M.Invoice.create(
     invoiceSpecs.map((spec) => ({
       pid: `in_${String(spec.n).padStart(3, "0")}`,
       number: `INV-2026-${String(spec.n).padStart(4, "0")}`,

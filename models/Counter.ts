@@ -18,7 +18,7 @@ export async function nextSequence(key: string): Promise<number> {
   const doc = await Counter.findByIdAndUpdate(
     key,
     { $inc: { seq: 1 } },
-    { upsert: true, new: true },
+    { upsert: true, returnDocument: "after" },
   ).lean();
   return doc?.seq ?? 1;
 }
