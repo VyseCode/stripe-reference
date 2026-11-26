@@ -449,6 +449,204 @@ export function NewApiKeyForm() {
   );
 }
 
+export function NewSubscriptionForm({
+  customers,
+  prices,
+}: {
+  customers: Array<{ id: string; name: string }>;
+  prices: Array<{ id: string; label: string }>;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    try {
+      const result = await send("/api/subscriptions", "POST", {
+        customer: String(form.get("customer") ?? ""),
+        price: String(form.get("price") ?? ""),
+        status: String(form.get("status") ?? "active"),
+      });
+      if (!result.ok) {
+        setError(errorMessage(result.data));
+        return;
+      }
+      setOpen(false);
+      router.refresh();
+    } catch {
+      setError("Unable to reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <OpenButton open={open} label="New subscription" onClick={() => setOpen(!open)} />
+      <Panel open={open} title="Start a subscription" onClose={() => setOpen(false)}>
+        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="sub-customer" className="mb-1.5 block text-xs font-semibold text-ink">Customer</label>
+            <select id="sub-customer" name="customer" required defaultValue="" className={inputClass}>
+              <option value="" disabled>Choose a customer</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>{customer.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="sub-price" className="mb-1.5 block text-xs font-semibold text-ink">Recurring price</label>
+            <select id="sub-price" name="price" required defaultValue="" className={inputClass}>
+              <option value="" disabled>Choose a price</option>
+              {prices.map((price) => (
+                <option key={price.id} value={price.id}>{price.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="sub-status" className="mb-1.5 block text-xs font-semibold text-ink">Starting status</label>
+            <select id="sub-status" name="status" className={inputClass}>
+              <option value="active">Active</option>
+              <option value="trialing">Trialing</option>
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <button type="submit" disabled={busy} className={buttonClass}>
+              {busy ? "Creating…" : "Create subscription"}
+            </button>
+            <ErrorNote message={error} />
+          </div>
+        </form>
+      </Panel>
+    </>
+  );
+}
+
+export function NewCheckoutForm({
+  customers,
+  prices,
+}: {
+  customers: Array<{ id: string; name: string }>;
+  prices: Array<{ id: string; label: string }>;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    try {
+      const result = await send("/api/checkout/sessions", "POST", {
+        customer: String(form.get("customer") ?? ""),
+        price: String(form.get("price") ?? ""),
+        outcome: String(form.get("outcome") ?? "success"),
+      });
+      if (!result.ok) {
+        setError(errorMessage(result.data));
+        return;
+      }
+      const data = result.data.checkoutSession as { id: string };
+      setOpen(false);
+      router.push(`/checkout/${data.id}`);
+      router.refresh();
+    } catch {
+      setError("Unable to reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <OpenButton open={open} label="New checkout" onClick={() => setOpen(!open)} />
+      <Panel open={open} title="Create a checkout session" onClose={() => setOpen(false)}>
+        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="co-customer" className="mb-1.5 block text-xs font-semibold text-ink">Customer</label>
+            <select id="co-customer" name="customer" required defaultValue="" className={inputClass}>
+              <option value="" disabled>Choose a customer</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>{customer.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="co-price" className="mb-1.5 block text-xs font-semibold text-ink">Price</label>
+            <select id="co-price" name="price" required defaultValue="" className={inputClass}>
+              <option value="" disabled>Choose a price</option>
+              {prices.map((price) => (
+                <option key={price.id} value={price.id}>{price.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label htmlFor="co-outcome" className="mb-1.5 block text-xs font-semibold text-ink">Simulated result</label>
+            <select id="co-outcome" name="outcome" className={inputClass}>
+              <option value="success">Success — create an invoice and ledger entries</option>
+              <option value="failure">Failure — no charge, no invoice</option>
+            </select>
+            <p className="mt-1.5 text-xs text-inksoft">
+              This controls the local payment adapter. No external service is contacted.
+            </p>
+          </div>
+          <div className="sm:col-span-2">
+            <button type="submit" disabled={busy} className={buttonClass}>
+              {busy ? "Creating…" : "Create checkout session"}
+            </button>
+            <ErrorNote message={error} />
+          </div>
+        </form>
+      </Panel>
+    </>
+  );
+}
+
+export function CompleteCheckout({ sessionId }: { sessionId: string }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+
+  async function complete(outcome: "success" | "failure") {
+    setBusy(outcome);
+    setError("");
+    try {
+      const result = await send(`/api/checkout/sessions/${sessionId}/complete`, "POST", { outcome });
+      if (!result.ok) {
+        setError(errorMessage(result.data));
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError("Unable to reach the server.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" disabled={busy !== ""} onClick={() => complete("success")} className={buttonClass}>
+          Complete with success
+        </button>
+        <button type="button" disabled={busy !== ""} onClick={() => complete("failure")} className={secondaryButtonClass}>
+          Simulate failure
+        </button>
+      </div>
+      <ErrorNote message={error} />
+    </div>
+  );
+}
+
 export function RowAction({
   url,
   method,

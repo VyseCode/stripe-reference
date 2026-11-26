@@ -456,7 +456,10 @@ async function main() {
   );
 
   await M.Customer.updateOne({ _id: c1._id }, { $set: { balanceMinor: 3700 } });
-  await M.Counter.create({ _id: "invoice", seq: 12 });
+  await M.Counter.create([
+    { _id: "invoice", seq: 12 },
+    { _id: "balance", seq: running },
+  ]);
 
   const counts = {};
   for (const [name, model] of Object.entries(M)) {

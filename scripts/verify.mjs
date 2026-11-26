@@ -192,9 +192,107 @@ function main() {
   statusIs("api keys: revoke 200", request("DELETE", `/api/api-keys/${newKey.json.apiKey.id}`), 200);
   statusIs("api keys: double revoke 409", request("DELETE", `/api/api-keys/${newKey.json.apiKey.id}`), 409);
 
+  console.log("\n— Slice 3: subscriptions and checkout —");
+
+  const subs = request("GET", "/api/subscriptions");
+  statusIs("subscriptions: list", subs, 200);
+  assert("subscriptions: seeded 6", subs.json?.total === 6, `total=${subs.json?.total}`);
+  const activeSubs = request("GET", "/api/subscriptions?status=active");
+  assert("subscriptions: active filter", activeSubs.json?.total === 3, `total=${activeSubs.json?.total}`);
+  const pastDueSubs = request("GET", "/api/subscriptions?status=past_due");
+  assert("subscriptions: past_due filter", pastDueSubs.json?.total === 1);
+  const trialingSubs = request("GET", "/api/subscriptions?status=trialing");
+  assert("subscriptions: trialing filter", trialingSubs.json?.total === 1);
+  const canceledSubs = request("GET", "/api/subscriptions?status=canceled");
+  assert("subscriptions: canceled filter", canceledSubs.json?.total === 1);
+  statusIs("subscriptions: detail by pid", request("GET", "/api/subscriptions/sub_001"), 200);
+  statusIs("subscriptions: detail 404", request("GET", "/api/subscriptions/nope"), 404);
+
+  statusIs("subscriptions: one-time price rejected 400", request("POST", "/api/subscriptions", {
+    customer: "cust_007", price: "price_003",
+  }), 400);
+  statusIs("subscriptions: duplicate active rejected 409", request("POST", "/api/subscriptions", {
+    customer: "cust_001", price: "price_001",
+  }), 409);
+  statusIs("subscriptions: missing customer 404", request("POST", "/api/subscriptions", {
+    customer: "cust_none", price: "price_001",
+  }), 404);
+  statusIs("subscriptions: anonymous create 401", request("POST", "/api/subscriptions", {
+    customer: "cust_007", price: "price_001",
+  }, { noAuth: true }), 401);
+
+  const cancelSub = request("POST", "/api/subscriptions", {
+    customer: "cust_007", price: "price_001",
+  });
+  statusIs("subscriptions: create for cancellation", cancelSub, 201);
+  const cancelId = cancelSub.json?.subscription?.id ?? "";
+  const atPeriodEnd = request("POST", `/api/subscriptions/${cancelId}/cancel`, { atPeriodEnd: true });
+  statusIs("subscriptions: cancel at period end", atPeriodEnd, 200);
+  assert("subscriptions: stays active until period end", atPeriodEnd.json?.subscription?.status === "active" && atPeriodEnd.json?.subscription?.cancelAtPeriodEnd === true);
+  const cycled = request("POST", `/api/subscriptions/${cancelId}/cycle`, {});
+  statusIs("subscriptions: cycle after cancel", cycled, 200);
+  assert("subscriptions: canceled after period end", cycled.json?.subscription?.status === "canceled" && cycled.json?.invoice === null);
+  statusIs("subscriptions: cycle on canceled 409", request("POST", `/api/subscriptions/${cancelId}/cycle`, {}), 409);
+
+  const paySub = request("POST", "/api/subscriptions", {
+    customer: "cust_008", price: "price_001",
+  });
+  statusIs("subscriptions: create for failed payment", paySub, 201);
+  const payId = paySub.json?.subscription?.id ?? "";
+  const cycle = request("POST", `/api/subscriptions/${payId}/cycle`, {});
+  statusIs("subscriptions: cycle generates invoice", cycle, 200);
+  assert("subscriptions: cycle invoice is open", cycle.json?.invoice?.status === "open");
+  statusIs("subscriptions: second cycle advances period", request("POST", `/api/subscriptions/${payId}/cycle`, {}), 200);
+  const failedPay = request("POST", `/api/subscriptions/${payId}/payment`, { outcome: "failure" });
+  statusIs("subscriptions: failed payment", failedPay, 200);
+  assert("subscriptions: failed payment sets past_due", failedPay.json?.subscription?.status === "past_due");
+  assert("subscriptions: failed payment has decline code", failedPay.json?.charge?.failureCode === "card_declined");
+  statusIs("subscriptions: cycle blocked while past_due 409", request("POST", `/api/subscriptions/${payId}/cycle`, {}), 409);
+  const retry = request("POST", `/api/subscriptions/${payId}/payment`, { outcome: "success" });
+  statusIs("subscriptions: retry payment", retry, 200);
+  assert("subscriptions: retry restores active", retry.json?.subscription?.status === "active");
+  assert("subscriptions: retry marks invoice paid", retry.json?.invoice?.status === "paid");
+
+  const checkouts = request("GET", "/api/checkout/sessions");
+  statusIs("checkout: list", checkouts, 200);
+  assert("checkout: seeded 6", checkouts.json?.total === 6);
+  const openCheckouts = request("GET", "/api/checkout/sessions?status=open");
+  assert("checkout: open filter", openCheckouts.json?.total === 2, `total=${openCheckouts.json?.total}`);
+  statusIs("checkout: detail", request("GET", "/api/checkout/sessions/cs_001"), 200);
+  statusIs("checkout: detail 404", request("GET", "/api/checkout/sessions/nope"), 404);
+
+  const newCheckout = request("POST", "/api/checkout/sessions", {
+    customer: "cust_007", price: "price_003", outcome: "success",
+  });
+  statusIs("checkout: create", newCheckout, 201);
+  const checkoutId = newCheckout.json?.checkoutSession?.id ?? "";
+  const completed = request("POST", `/api/checkout/sessions/${checkoutId}/complete`, { outcome: "success" });
+  statusIs("checkout: complete success", completed, 200);
+  assert("checkout: session complete", completed.json?.checkoutSession?.status === "complete");
+  assert("checkout: invoice paid", completed.json?.invoice?.status === "paid");
+  assert("checkout: charge ref present", typeof completed.json?.charge?.chargeRef === "string");
+  statusIs("checkout: double complete 409", request("POST", `/api/checkout/sessions/${checkoutId}/complete`, {}), 409);
+
+  const failCheckout = request("POST", "/api/checkout/sessions", {
+    customer: "cust_007", price: "price_003", outcome: "failure",
+  });
+  const failId = failCheckout.json?.checkoutSession?.id ?? "";
+  const failedCheckout = request("POST", `/api/checkout/sessions/${failId}/complete`, {});
+  statusIs("checkout: complete failure", failedCheckout, 200);
+  assert("checkout: failed session has no invoice", failedCheckout.json?.invoice === null);
+  assert("checkout: failed session status", failedCheckout.json?.checkoutSession?.status === "failed");
+
+  const subCheckout = request("POST", "/api/checkout/sessions", {
+    customer: "cust_008", price: "price_004",
+  });
+  const subCheckoutId = subCheckout.json?.checkoutSession?.id ?? "";
+  const subCompleted = request("POST", `/api/checkout/sessions/${subCheckoutId}/complete`, {});
+  assert("checkout: subscription mode creates subscription", Boolean(subCompleted.json?.subscription?.id));
+
   console.log("\n— Pages —");
   for (const path of [
     "/dashboard", "/customers", "/customers/cust_001", "/products", "/prices", "/api-keys",
+    "/subscriptions", "/subscriptions/sub_001", "/checkout", "/checkout/cs_001",
   ]) {
     statusIs(`page: ${path}`, request("GET", path), 200);
   }
@@ -202,6 +300,8 @@ function main() {
     statusIs(`page: ${path} (anonymous)`, request("GET", path, undefined, { noAuth: true }), 200);
   }
   statusIs("page: unknown customer 404", request("GET", "/customers/no-such-customer"), 404);
+  statusIs("page: unknown subscription 404", request("GET", "/subscriptions/no-such-sub"), 404);
+  statusIs("page: unknown checkout 404", request("GET", "/checkout/no-such-session"), 404);
   statusIs("page: unknown route 404", request("GET", "/definitely-not-a-page"), 404);
 
   console.log(`\nVERIFICATION: ${passed} passed, ${failed} failed`);
